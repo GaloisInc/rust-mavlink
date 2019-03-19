@@ -6,6 +6,13 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
+#[cfg(test)]
+extern crate quickcheck;
+
+#[cfg(test)]
+#[macro_use(quickcheck)]
+extern crate quickcheck_macros;
+
 
 #[cfg(feature = "std")]
 use std::io::{Read, Result, Write};
@@ -369,8 +376,33 @@ pub fn write_v1_msg<W: Write>(w: &mut W, header: MavHeader, data: &MavMessage) -
 }
 
 
+#[cfg(test)]
+mod test_quickcheck {
+    use crate::*;
+    use quickcheck::*;
 
+    struct MyVec(Vec<u8>);
 
+    impl Read for MyVec {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+            let len = std::cmp::min(buf.len(), self.0.len());
+            for idx in 0..len {
+                buf[idx] = self.0.remove(0);
+            }
+            Ok(len)
+        }
+    }
 
-
-
+    #[quickcheck]
+    fn test_deser(input: Vec<u8>) -> bool {
+        let mut input = MyVec(input);
+	read_v1_msg(&mut input);
+	true
+	/*
+        match read_v1_msg(&mut input) {
+            Ok(_) => true,
+            Err(_) => false,
+        }
+	*/
+    }
+}
