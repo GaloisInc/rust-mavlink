@@ -38,7 +38,8 @@ mod test_encode_decode {
         let (_header, recv_msg) = mavlink::read_v2_msg(&mut c).expect("Failed to read");
 
         if let mavlink::common::MavMessage::COMMAND_INT(recv_msg) = recv_msg {
-            assert_eq!(recv_msg.command, mavlink::common::MavCmd::MAV_CMD_NAV_TAKEOFF);
+            //assert_eq!(recv_msg.command, mavlink::common::MavCmd::MAV_CMD_NAV_TAKEOFF);
+            assert_eq!(recv_msg.command, 11);
         } else {
             panic!("Decoded wrong message type")
         }
@@ -58,8 +59,10 @@ mod test_encode_decode {
         let mut c = v.as_slice();
         let (_header, recv_msg) = mavlink::read_v2_msg(&mut c).expect("Failed to read");
         if let mavlink::common::MavMessage::HIL_ACTUATOR_CONTROLS(recv_msg) = recv_msg {
-            assert_eq!(mavlink::common::MavModeFlag::MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
-            recv_msg.mode & mavlink::common::MavModeFlag::MAV_MODE_FLAG_CUSTOM_MODE_ENABLED);
+            //assert_eq!(mavlink::common::MavModeFlag::MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+            assert_eq!(1,
+            //recv_msg.mode & mavlink::common::MavModeFlag::MAV_MODE_FLAG_CUSTOM_MODE_ENABLED);
+            recv_msg.mode & 1);
         } else {
             panic!("Decoded wrong message type")
         }

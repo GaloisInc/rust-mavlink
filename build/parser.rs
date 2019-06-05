@@ -704,7 +704,7 @@ pub fn parse_profile(file: &mut Read) -> MavProfile {
 
     //let profile = profile.update_messages(); //TODO verify no longer needed
     //profile.update_enums()
-    profile.messages = profile.messages[1..10].to_vec();
+    //profile.messages = profile.messages[1..10].to_vec();
     profile
 }
 
