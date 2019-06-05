@@ -10,11 +10,11 @@ use xml::reader::{EventReader, XmlEvent};
 use syn::spanned::Spanned;
 use proc_macro2::TokenStream;
 
-use crate::mavmessage::MavMessage;
-use crate::mavmessage::MavField;
-use crate::mavmessage::MavType;
-use crate::mavmessage::MavEnum;
-use crate::mavmessage::MavEnumEntry;
+use crate::core::MavMessage;
+use crate::core::MavField;
+use crate::core::MavType;
+use crate::core::MavEnum;
+use crate::core::MavEnumEntry;
 
 #[derive(Debug, PartialEq, Clone, Default)]
 pub struct MavProfile {
@@ -157,12 +157,14 @@ impl MavProfile {
     /// E.g. "include!(concat!(env!("OUT_DIR"), "/ping.rs"));"
     fn emit_struct_includes(&self) -> TokenStream {
         let mut field_toks = TokenStream::new();
-        for msg in &self.messages {
-            let name = format!("/{}.rs",msg.name.to_lowercase());
-            field_toks.extend(quote!{
-                include!(concat!(env!("OUT_DIR"), #name));
-                });
-        }
+        self.messages
+            .iter()
+            .for_each(|msg| {
+                let name = format!("/{}.rs",msg.name.to_lowercase());
+                field_toks.extend(quote!{
+                    include!(concat!(env!("OUT_DIR"), #name));
+                    });
+            });
         field_toks
     }
 
@@ -176,23 +178,14 @@ impl MavProfile {
         let msg_ids = self.emit_msg_ids();
         let msg_crc = self.emit_msg_crc();
         //let mav_message = self.emit_mav_message(enum_names.clone(), struct_names.clone());
-        //let mav_message_parse =
-        //    self.emit_mav_message_parse(enum_names.clone(), struct_names.clone(), msg_ids.clone());
         let mav_message_id = self.emit_mav_message_id(enums.clone(), msg_ids.clone());
-        //let mav_message_serialize = self.emit_mav_message_serialize(enum_names);
+        let mav_message_ser = self.emit_mav_message_serialize(enums.clone());
+        let mav_message_deser = self.emit_mav_message_deserialize(enums.clone(), structs.clone(), msg_ids.clone());
 
-        let mut vartype1 = TokenStream::new();
-        vartype1.extend(quote!(u16 u32 u64 i16 i32 i64 f32 f64));
-
-        let mut vartype_write = TokenStream::new();
-        vartype_write.extend(quote!(write_u16 write_u32 write_u64 write_i16 write_i32 write_i64 write_f32 write_f64));
-
-        let mut vartype_read = TokenStream::new();
-        vartype_read.extend(quote!(read_u16 read_u32 read_u64 read_i16 read_i32 read_i64 read_f32 read_f64));
-
-        let mut varsize1 = TokenStream::new();
-        varsize1.extend(quote!(2 4 8 2 4 8 4 8));
-        let varsize2 = varsize1.clone();
+        let vartype1 = TokenStream::from(quote!(u16 u32 u64 i16 i32 i64 f32 f64));
+        let vartype_write = TokenStream::from(quote!(write_u16 write_u32 write_u64 write_i16 write_i32 write_i64 write_f32 write_f64));
+        let vartype_read = TokenStream::from(quote!(read_u16 read_u32 read_u64 read_i16 read_i32 read_i64 read_f32 read_f64));
+        let varsize = TokenStream::from(quote!(2 4 8 2 4 8 4 8));
 
         quote!{
             //#(#enums)* // TODO
@@ -208,9 +201,9 @@ impl MavProfile {
             }
 
             impl MavMessage {
-                //#mav_message_parse
+                #mav_message_ser
+                #mav_message_deser
                 #mav_message_id
-                //#mav_message_serialize
                 pub fn extra_crc(id: u32) -> u8 {
                     match id {
                         #(#msg_ids => #msg_crc,)*
@@ -222,72 +215,135 @@ impl MavProfile {
             #[derive(Debug)]
             pub enum Error {
                 NotEnoughBytes,
+                UnknownMsgId,
             }
 
-            #[doc="Trait for serialization and deserialization of Mavlink messages (and other types"]
-            pub trait Mavlink where Self : Sized {
+            #[doc="Trait for serialization and deserialization of primitive types"]
+            pub trait MavCore where Self : Sized {
                 #[doc="Serialize into a vector of bytes"]
-                fn ser(&self, output: &mut [u8]) -> Result<(), Error>;
+                #[doc="If OK returns the number of bytes used from the output buffer"]
+                fn ser(&self, output: &mut [u8]) -> Result<usize, Error>;
                 #[doc="Deserialize from a byte vector. Return None if deserializaion failed"]
                 fn deser(input: &[u8]) -> Result<Self, Error>;
+                #[doc="Size of a single element in bytes"]
+                fn element_size() -> usize;
             }
 
-            impl Mavlink for u8 {
-                fn ser(&self, output: &mut [u8]) -> Result<(), Error> {
-                    if output.len() < 1 {
+            #[doc="Trait for serialization and deserialization of ArrayVec types"]
+            pub trait MavArray where Self : Sized {
+                #[doc="Serialize into a vector of bytes"]
+                #[doc="If OK returns the number of bytes used from the output buffer"]
+                fn ser(&self, output: &mut [u8]) -> Result<usize, Error>;
+                #[doc="Deserialize from a byte vector. Return None if deserializaion failed"]
+                fn deser(input: &[u8]) -> Result<Self, Error>;
+                #[doc="Size of a single array element in bytes"]
+                fn element_size() -> usize;
+            }
+
+            impl MavCore for char {
+                fn element_size() -> usize {
+                    1
+                }
+                fn ser(&self, output: &mut [u8]) -> Result<usize, Error> {
+                    if output.len() < Self::element_size() {
+                        return Err(Error::NotEnoughBytes);
+                    }
+                    output[0] = *self as u8;
+                    Ok(1)
+                }
+                fn deser(input: &[u8]) -> Result<Self, Error> {
+                    if input.len() < Self::element_size() {
+                        return Err(Error::NotEnoughBytes);
+                    }
+                    Ok(input[0] as char)
+                }
+            }
+
+            impl MavCore for u8 {
+                fn element_size() -> usize {
+                    1
+                }
+                fn ser(&self, output: &mut [u8]) -> Result<usize, Error> {
+                    if output.len() < Self::element_size() {
                         return Err(Error::NotEnoughBytes);
                     }
                     output[0] = *self;
-                    Ok(())
+                    Ok(1)
                 }
                 fn deser(input: &[u8]) -> Result<Self, Error> {
-                    if input.len() < 1 {
+                    if input.len() < Self::element_size() {
                         return Err(Error::NotEnoughBytes);
                     }
                     Ok(input[0])
                 }
             }
 
-            impl Mavlink for i8 {
-                fn ser(&self, output: &mut [u8]) -> Result<(), Error> {
-                    if output.len() < 1 {
+            impl MavCore for i8 {
+                fn element_size() -> usize {
+                    1
+                }
+                fn ser(&self, output: &mut [u8]) -> Result<usize, Error> {
+                    if output.len() < Self::element_size() {
                         return Err(Error::NotEnoughBytes);
                     }
                     output[0] = *self as u8;
-                    Ok(())
+                    Ok(1)
                 }
                 fn deser(input: &[u8]) -> Result<Self, Error> {
-                    if input.len() < 1 {
+                    if input.len() < Self::element_size() {
                         return Err(Error::NotEnoughBytes);
                     }
                     Ok(input[0] as i8)
                 }
             }
 
-            #(impl Mavlink for #vartype1 {
-                fn ser(&self, output: &mut [u8]) -> Result<(), Error> {
-                    if output.len() < #varsize1 {
+            #(impl MavCore for #vartype1 {
+                fn element_size() -> usize {
+                    #varsize
+                }
+                fn ser(&self, output: &mut [u8]) -> Result<usize, Error> {
+                    if output.len() < Self::element_size() {
                         return Err(Error::NotEnoughBytes);
                     }
-                    Ok(LittleEndian:: #vartype_write (output, *self))
+                    LittleEndian:: #vartype_write (output, *self);
+                    Ok(Self::element_size())
                 }
                 fn deser(input: &[u8]) -> Result<Self, Error> {
-                    if input.len() < #varsize2 {
+                    if input.len() < Self::element_size() {
                         return Err(Error::NotEnoughBytes);
                     }
                     Ok(LittleEndian:: #vartype_read (input))
                 }
             })*
 
-            impl Mavlink for ArrayVec<[u8;1]> {
-                fn ser(&self, output: &mut [u8]) -> Result<(), Error> {
-                    return Err(Error::NotEnoughBytes);
+            impl<A: arrayvec::Array> MavArray for ArrayVec<A> where A::Item: MavCore {
+                fn element_size() -> usize {
+                    A::Item::element_size()
+                }
+                fn ser(&self, output: &mut [u8]) -> Result<usize, Error> {
+                    if output.len() < ( self.len() * Self::element_size() ) {
+                        return Err(Error::NotEnoughBytes);
+                    }
+                    let mut idx = 0;
+                    for elem in self {
+                        idx += elem.ser(&mut output[idx..])?;
+                    }
+                    Ok(idx)
                 }
                 fn deser(input: &[u8]) -> Result<Self, Error> {
-                    return Err(Error::NotEnoughBytes);
+                    let elem_len = Self::element_size();
+                    if input.len() < elem_len {
+                        return Err(Error::NotEnoughBytes);
+                    }
+                    let mut v = Self::new();
+                    let items = input.len() / elem_len;
+                    for item in 0..items {
+                        let idx = item*elem_len;
+                        v.push(A::Item::deser(&input[idx..])?);
+                    }
+                    Ok(v)
                 }
             }
-
         }
     }
 
@@ -316,6 +372,24 @@ impl MavProfile {
     //     }
     // }
 
+
+    /// Emit deserializing code for MavMessage enum
+    fn emit_mav_message_deserialize(&self, enums: TokenStream, structs: TokenStream, ids: TokenStream) -> TokenStream {
+        quote!{
+            #[doc="Deserialize MavMessage"]
+            pub fn deser(id: u32, payload: &[u8]) -> Result<Self, Error> {
+                match id {
+                    //#(&MavMessage::#enums(ref body) => body.ser(),)*
+                    #(#ids => { let val = #structs::deser(payload)?; 
+                            Ok(MavMessage::#enums(val))
+                    })*
+                    //#(#ids => MavMessage::#enums(#structs::deser(payload)),)*
+                    _ => Err(Error::UnknownMsgId),
+                }
+            }
+        }
+    }
+
     /// Emits `pub fn message_id(&self) -> u32` which retuns message ID corresponding
     /// to each `MavMessage` enum variant
     fn emit_mav_message_id(&self, enums: TokenStream, ids: TokenStream) -> TokenStream {
@@ -328,15 +402,17 @@ impl MavProfile {
         }
     }
 
-    // fn emit_mav_message_serialize(&self, enums: Vec<Tokens>) -> Tokens {
-    //     quote!{
-    //         pub fn ser(&self) -> Vec<u8> {
-    //             match self {
-    //                 #(&MavMessage::#enums(ref body) => body.ser(),)*
-    //             }
-    //         }
-    //     }
-    // }
+    /// Emit serializing code for MavMessage enum
+    fn emit_mav_message_serialize(&self, enums: TokenStream) -> TokenStream {
+        quote!{
+            #[doc="Serialize MavMessage"]
+            pub fn ser(&self) -> Result<Vec<u8>, Error> {
+                match self {
+                    #(&MavMessage::#enums(ref body) => body.ser(),)*
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]

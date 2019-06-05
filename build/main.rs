@@ -10,7 +10,7 @@ extern crate crc16;
 extern crate xml;
 
 mod parser;
-mod mavmessage;
+mod core;
 
 use std::env;
 use std::fs::File;
