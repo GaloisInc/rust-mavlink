@@ -17,7 +17,6 @@ mod test_v1_encode_decode {
     pub fn test_read_heartbeat() {
         let mut r = HEARTBEAT_V1;
         let (header, msg) = mavlink::read_v1_msg(&mut r).expect("Failed to parse message");
-        //println!("{:?}, {:?}", header, msg);
 
         assert_eq!(header, ::test_shared::COMMON_MSG_HEADER);
         let heartbeat_msg = ::test_shared::get_heartbeat_msg();
