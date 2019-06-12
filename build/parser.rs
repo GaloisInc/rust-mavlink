@@ -192,6 +192,9 @@ impl MavProfile {
             use arrayvec::ArrayVec;
             use byteorder::{ByteOrder, LittleEndian};
 
+            #[cfg(test)]
+            use quickcheck::*;
+
             #includes
 
 
@@ -214,8 +217,14 @@ impl MavProfile {
 
             #[derive(Debug)]
             pub enum Error {
+                #[doc="Ser/Deser array is not long enough"]
                 NotEnoughBytes,
+                #[doc="Unregognized message ID"]
                 UnknownMsgId,
+                #[doc="Provided length of the serialized array is longer than expected"]
+                ArrayTooLong,
+                #[doc="The serialized array length doesn't match the array payload"]
+                IncorrectNumberOfArrayElements,
             }
 
             #[doc="Trait for serialization and deserialization of primitive types"]
@@ -321,24 +330,44 @@ impl MavProfile {
                     A::Item::element_size()
                 }
                 fn ser(&self, output: &mut [u8]) -> Result<usize, Error> {
-                    if output.len() < ( self.len() * Self::element_size() ) {
+                    let elem_len = Self::element_size();
+                    if output.len() < ( self.len() * elem_len ) {
                         return Err(Error::NotEnoughBytes);
                     }
-                    let mut idx = 0;
+                    // #[doc="first write the array length"]
+                    let mut idx = (self.len() as u8).ser(output)?;
+                    // #[doc="now serialize the array"]
                     for elem in self {
                         idx += elem.ser(&mut output[idx..])?;
                     }
                     Ok(idx)
                 }
                 fn deser(input: &[u8]) -> Result<Self, Error> {
+                    // #[doc="Create a new ArrayVec"]
+                    let mut v = Self::default();
                     let elem_len = Self::element_size();
-                    if input.len() < elem_len {
+                    let array_capacity = v.capacity();
+                    // #[doc="The first byte is stored array length"]
+                    let payload_len = input.len() - 1;
+                    // #[doc="Require at least one element and the length byte"]
+                    if payload_len < elem_len {
                         return Err(Error::NotEnoughBytes);
                     }
-                    let mut v = Self::new();
-                    let items = input.len() / elem_len;
+                    // #[doc="Deser the actual array length"]
+                    let ser_len = input[0] as usize;
+                    // #[doc="Check the max capacity vs. serialized length"]
+                    if array_capacity < ser_len {
+                        return Err(Error::ArrayTooLong);
+                    }
+                    // #[doc="Create input idx starting from the second byte"]
+                    let mut idx = 1;
+                    // #[doc="Make sure we have the correct number of bytes for the array payload"]
+                    if payload_len != (elem_len * ser_len) {
+                        return Err(Error::IncorrectNumberOfArrayElements);
+                    }
+                    let items = payload_len / elem_len;
                     for item in 0..items {
-                        let idx = item*elem_len;
+                        idx += item*elem_len;
                         v.push(A::Item::deser(&input[idx..])?);
                     }
                     Ok(v)
@@ -704,7 +733,7 @@ pub fn parse_profile(file: &mut Read) -> MavProfile {
 
     //let profile = profile.update_messages(); //TODO verify no longer needed
     //profile.update_enums()
-    //profile.messages = profile.messages[1..10].to_vec();
+    profile.messages = profile.messages[0..4].to_vec();
     profile
 }
 
