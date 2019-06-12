@@ -33,8 +33,9 @@ serial = { version = "0.4", optional = true }
 bytes = "0.4"
 
 [dependencies.arrayvec]
-version = "0.4"
-features = ["array-sizes-33-128", "array-sizes-129-255"] 
+git = "https://github.com/podhrmic/arrayvec"
+branch = "quickcheck"
+features = ["array-sizes-33-128", "array-sizes-129-255", "quickcheck-1"] 
 
 [dependencies.byteorder]
 version = "1.3.1"

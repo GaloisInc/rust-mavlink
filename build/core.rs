@@ -182,7 +182,10 @@ impl MavMessage {
                 #[quickcheck]
                 fn qc_roundtrips(x: #msg_name) -> Result<TestResult, Error> {
                     let mut buf = x.ser()?;
+                    println!("x={:?}",x);
+                    println!("buf={:?}",buf);
                     let y = #msg_name::deser(&buf)?;
+                    println!("y={:?}",y);
                     Ok(TestResult::from_bool(x == y))
                 }
             }
@@ -246,7 +249,7 @@ impl MavField {
         let vartype = self.mavtype.rust_type();
         quote!{
             var.#varname = < #vartype >::deser(&input[_idx..])?;
-            _idx += < #vartype >::element_size();
+            _idx += var.#varname.byte_size();
         }
     }
 
@@ -464,7 +467,8 @@ impl MavType {
                 quote!{i8}
             },
             Char => {
-                quote!{char}
+                //quote!{char}
+                quote!{u8}
             },
             UInt16 => {
                 quote!{u16}

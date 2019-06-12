@@ -186,6 +186,7 @@ impl MavProfile {
         let vartype_write = TokenStream::from(quote!(write_u16 write_u32 write_u64 write_i16 write_i32 write_i64 write_f32 write_f64));
         let vartype_read = TokenStream::from(quote!(read_u16 read_u32 read_u64 read_i16 read_i32 read_i64 read_f32 read_f64));
         let varsize = TokenStream::from(quote!(2 4 8 2 4 8 4 8));
+        let varsize2 = varsize.clone();
 
         quote!{
             //#(#enums)* // TODO
@@ -225,6 +226,12 @@ impl MavProfile {
                 ArrayTooLong,
                 #[doc="The serialized array length doesn't match the array payload"]
                 IncorrectNumberOfArrayElements,
+                #[doc="The provided array to be deserialized is too short"]
+                ArrayTooShort,
+                #[doc="Empty array was provided for deserialization"]
+                EmptyArray,
+                #[doc="Array length was non-zero when it was expected to be zero"]
+                InvalidArrayLength,
             }
 
             #[doc="Trait for serialization and deserialization of primitive types"]
@@ -234,7 +241,9 @@ impl MavProfile {
                 fn ser(&self, output: &mut [u8]) -> Result<usize, Error>;
                 #[doc="Deserialize from a byte vector. Return None if deserializaion failed"]
                 fn deser(input: &[u8]) -> Result<Self, Error>;
-                #[doc="Size of a single element in bytes"]
+                #[doc="Serialized length in bytes"]
+                fn byte_size(&self) -> usize;
+                #[doc="Size of a single array element in bytes"]
                 fn element_size() -> usize;
             }
 
@@ -247,9 +256,14 @@ impl MavProfile {
                 fn deser(input: &[u8]) -> Result<Self, Error>;
                 #[doc="Size of a single array element in bytes"]
                 fn element_size() -> usize;
+                #[doc="Serialized length in bytes"]
+                fn byte_size(&self) -> usize;
             }
 
             impl MavCore for char {
+                fn byte_size(&self) -> usize {
+                    1
+                }
                 fn element_size() -> usize {
                     1
                 }
@@ -269,6 +283,9 @@ impl MavProfile {
             }
 
             impl MavCore for u8 {
+                fn byte_size(&self) -> usize {
+                    1
+                }
                 fn element_size() -> usize {
                     1
                 }
@@ -288,6 +305,9 @@ impl MavProfile {
             }
 
             impl MavCore for i8 {
+                fn byte_size(&self) -> usize {
+                    1
+                }
                 fn element_size() -> usize {
                     1
                 }
@@ -307,8 +327,11 @@ impl MavProfile {
             }
 
             #(impl MavCore for #vartype1 {
-                fn element_size() -> usize {
+                fn byte_size(&self) -> usize {
                     #varsize
+                }
+                fn element_size() -> usize {
+                    #varsize2
                 }
                 fn ser(&self, output: &mut [u8]) -> Result<usize, Error> {
                     if output.len() < Self::element_size() {
@@ -321,17 +344,21 @@ impl MavProfile {
                     if input.len() < Self::element_size() {
                         return Err(Error::NotEnoughBytes);
                     }
-                    Ok(LittleEndian:: #vartype_read (input))
+                    let val = LittleEndian:: #vartype_read (input);
+                    Ok(val)
                 }
             })*
 
-            impl<A: arrayvec::Array> MavArray for ArrayVec<A> where A::Item: MavCore {
+            impl<A: arrayvec::Array> MavArray for ArrayVec<A> where A::Item: MavCore + std::fmt::Debug {
+                fn byte_size(&self) -> usize {
+                    A::Item::element_size() * self.len() + 1 // the length byte
+                }
                 fn element_size() -> usize {
                     A::Item::element_size()
                 }
                 fn ser(&self, output: &mut [u8]) -> Result<usize, Error> {
-                    let elem_len = Self::element_size();
-                    if output.len() < ( self.len() * elem_len ) {
+                    let single_elem_len = Self::element_size();
+                    if output.len() < ( self.len() * single_elem_len ) {
                         return Err(Error::NotEnoughBytes);
                     }
                     // #[doc="first write the array length"]
@@ -343,32 +370,41 @@ impl MavProfile {
                     Ok(idx)
                 }
                 fn deser(input: &[u8]) -> Result<Self, Error> {
-                    // #[doc="Create a new ArrayVec"]
+                    // Create a new ArrayVec
                     let mut v = Self::default();
-                    let elem_len = Self::element_size();
+                    let single_elem_len = Self::element_size();
                     let array_capacity = v.capacity();
-                    // #[doc="The first byte is stored array length"]
-                    let payload_len = input.len() - 1;
-                    // #[doc="Require at least one element and the length byte"]
-                    if payload_len < elem_len {
-                        return Err(Error::NotEnoughBytes);
+                    // Check for trivial cases
+                    if input.len() == 0 {
+                        return Err(Error::EmptyArray);
                     }
-                    // #[doc="Deser the actual array length"]
-                    let ser_len = input[0] as usize;
-                    // #[doc="Check the max capacity vs. serialized length"]
-                    if array_capacity < ser_len {
+                    if input[0] == 0 {
+                        // a zero length array was provided, return empty ArrayVec
+                        return Ok(v);
+                    }
+                    // The first byte is stored array length
+                    let payload_len = input.len() - 1;
+                    // Require at least one element and the length byte
+                    if payload_len < single_elem_len {
+                        return Err(Error::ArrayTooShort);
+                    }
+                    // Deser the actual array length
+                    let elements = input[0] as usize;
+                    // Check the max capacity vs. serialized length
+                    if array_capacity < elements {
                         return Err(Error::ArrayTooLong);
                     }
-                    // #[doc="Create input idx starting from the second byte"]
+                    // Create input idx starting from the second byte
                     let mut idx = 1;
-                    // #[doc="Make sure we have the correct number of bytes for the array payload"]
-                    if payload_len != (elem_len * ser_len) {
+                    // Make sure we have the correct number of bytes for the array payload
+                    if payload_len < (single_elem_len * elements) {
                         return Err(Error::IncorrectNumberOfArrayElements);
                     }
-                    let items = payload_len / elem_len;
+                    let items = elements;
                     for item in 0..items {
-                        idx += item*elem_len;
-                        v.push(A::Item::deser(&input[idx..])?);
+                        let val = A::Item::deser(&input[idx..])?;
+                        idx += single_elem_len;
+                        v.push(val);
                     }
                     Ok(v)
                 }
@@ -733,7 +769,7 @@ pub fn parse_profile(file: &mut Read) -> MavProfile {
 
     //let profile = profile.update_messages(); //TODO verify no longer needed
     //profile.update_enums()
-    profile.messages = profile.messages[0..4].to_vec();
+    //profile.messages = profile.messages[0..10].to_vec();
     profile
 }
 
